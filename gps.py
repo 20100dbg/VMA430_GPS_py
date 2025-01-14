@@ -84,23 +84,23 @@ class VMA430(object):
 
         return arr
 
-    def sendConfiguration():
+    def sendConfiguration(self):
         
-        settings = generateConfiguration()
+        settings = self.generateConfiguration()
         gpsSetSuccess = 0
         print("Configuring u-Blox GPS initial state...");
 
         #Generate the configuration string for Navigation Mode
         setNav = [0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF, *settings, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-        calcChecksum(setNav[2:len(setNav)-4])
+        self.calcChecksum(setNav[2:len(setNav)-4])
 
         #Generate the configuration string for Data Rate
         setDataRate = [0xB5, 0x62, 0x06, 0x08, 0x06, 0x00, settings[1], settings[2], 0x01, 0x00, 0x01, 0x00, 0x00, 0x00]
-        calcChecksum(setDataRate[2:len(setDataRate)-4])
+        self.calcChecksum(setDataRate[2:len(setDataRate)-4])
 
         #Generate the configuration string for Baud Rate
         setPortRate = [0xB5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0xD0, 0x08, 0x00, 0x00, settings[3], settings[4], settings[5], 0x00, 0x07, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
-        calcChecksum(setPortRate[2:len(setPortRate)-4])
+        self.calcChecksum(setPortRate[2:len(setPortRate)-4])
 
         setGLL = [0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x2B]
         setGSA = [0xB5, 0x62, 0x06, 0x01, 0x08, 0x00, 0xF0, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x02, 0x32]
@@ -115,14 +115,14 @@ class VMA430(object):
         
             print("Setting Navigation mode...")
 
-            sendUBX(setNav)     #Send UBX Packet
-            gpsSetSuccess += getUBX_ACK(setNav[2]) #Passes Class ID and Message ID to the ACK Receive function
+            self.sendUBX(setNav)     #Send UBX Packet
+            gpsSetSuccess += self.getUBX_ACK(setNav[2:4]) #Passes Class ID and Message ID to the ACK Receive function
 
             if gpsSetSuccess == 5:
                 gpsSetSuccess -= 4
                 time.sleep(500)
                 lowerPortRate = [0xB5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0xD0, 0x08, 0x00, 0x00, 0x80, 0x25, 0x00, 0x00, 0x07, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA2, 0xB5]
-                sendUBX(lowerPortRate)
+                self.sendUBX(lowerPortRate)
                 time.sleep(2000);
 
             if gpsSetSuccess == 6:
@@ -137,13 +137,15 @@ class VMA430(object):
 
         if settings[4] != 0x25:
             print("Setting Port Baud Rate... ");
-            sendUBX(setPortRate);
+            self.sendUBX(setPortRate);
             print("Success!");
             delay(500);
 
 
-    def sendUBX(self, UBXmsg):        
+    def sendUBX(self, UBXmsg):
+        print(f"[+] SENDING {UBXmsg}")
         self.serial.write(UBXmsg)
+        time.sleep(0.5)
 
 
     def setUBXNav(self):
@@ -160,8 +162,8 @@ class VMA430(object):
         setNAVUBX[9] = CK_A
         setNAVUBX[10] = CK_B
 
-        sendUBX(setNAVUBX)
-        getUBX_ACK(setNAVUBX[2]);
+        self.sendUBX(setNAVUBX)
+        self.getUBX_ACK(setNAVUBX[2:4]);
 
         print("Enabling UBX position NAV data");
         
@@ -173,11 +175,11 @@ class VMA430(object):
         setNAVUBX_pos[9] = CK_A
         setNAVUBX_pos[10] = CK_B
 
-        sendUBX(setNAVUBX_pos)
-        getUBX_ACK(setNAVUBX_pos[2])
+        self.sendUBX(setNAVUBX_pos)
+        self.getUBX_ACK(setNAVUBX_pos[2:4])
 
     def getconfig(self):
-        get_cfg_message = [UBX_SYNC_1, UBX_SYNC_2, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00]
+        get_cfg_message = [UBX_SYNC[1], UBX_SYNC[2], 0x06, 0x00, 0x00, 0x00, 0x00, 0x00]
 
         CK_A, CK_B = 0, 0
         for i in range(4):
@@ -187,11 +189,11 @@ class VMA430(object):
         get_cfg_message[6] = CK_A
         get_cfg_message[7] = CK_B
         
-        sendUBX(get_cfg_message)
+        self.sendUBX(get_cfg_message)
 
     def getUBX_packet(self):
-        sync_chars = [UBX_SYNC_1, UBX_SYNC_2]
-        UBX_packet = [UBX_SYNC_1, UBX_SYNC_2, 0x00, 0x00]
+        sync_chars = [UBX_SYNC[1], UBX_SYNC[2]]
+        UBX_packet = [UBX_SYNC[1], UBX_SYNC[2], 0x00, 0x00]
     
         length_bytes = [0x00, 0x00]
         payload_length = 0
@@ -209,7 +211,7 @@ class VMA430(object):
                 print("TimeOut UBX packet!")
                 break
 
-            if self.serial.available():
+            if True: #self.serial.available():
                 incoming_char = self.serial.read_until(expected='')
                 print(incoming_char)
                 print(" ")
@@ -320,50 +322,62 @@ class VMA430(object):
         if self.latest_msg.payload_length != 28:
             return False
 
-        temp_lon = extractLong(4, msg_data);
+        temp_lon = self.extractLong(4, msg_data);
         self.location.longitude = temp_lon*0.0000001
         
-        temp_lat = extractLong(8, msg_data)
+        temp_lat = self.extractLong(8, msg_data)
         self.location.latitude = temp_lat*0.0000001
 
         return True;
 
 
-    def getUBX_ACK(msgID):
+    def btohex(self, b):
+        """ Get bytes to proper hex notation """
+        return ' '.join(['{:02X}'.format(x) for x in b])
+
+
+    def getUBX_ACK(self, msgID):
         CK_A, CK_B = 0, 0
 
-        ackWait = millis()
-        ackPacket = [0xB5, 0x62, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        ackWait = time.time()
+        ackPacket = b'\xB5\x62\x05'
         i = 0
 
-        while True:
-
-            if self.serial.available():
-                incoming_char = self.serial.read()
-
-                if incoming_char == ackPacket[i]:
-                    i += 1
-                elif i > 2:
-                    ackPacket[i] = incoming_char
-                    i += 1
-
-            if i > 9:
-                break
-
-            if (millis() - ackWait) > 1500:
+        data = self.serial.read_until(expected='')
+        if not data:
+            time.sleep(0.5)
+            data = self.serial.read_until(expected='')
+            if not data:
                 print("ACK Timeout")
                 return 5
 
-            if i == 4 and ackPacket[3] == 0x00:
-                print("NAK Received")
-                return 1
+        #print(f"[+] READ {self.btohex(data)}")
+        #print(f"[+] READ {data}")
+
+        if data[0:3] == ackPacket:
+            print("Received ACK")
+
+        if data[3] == b'\x00':
+            print("NAK Received")
+            return 1
+
+        print(f"data : {self.btohex(data[0:15])}...")
+        
+        ###################
+        #zone à corriger
+        checksum = data[2:9]
 
         #for (i = 2; i < 8; i++):
-        for i in range(2,8):
-            CK_A = CK_A + ackPacket[i]
+        for i in checksum:
+            CK_A = CK_A + i
             CK_B = CK_B + CK_A
 
-        if msgID[0] == ackPacket[6] and msgID[1] == ackPacket[7] and CK_A == ackPacket[8] and CK_B == ackPacket[9]:
+        print(f"checksum : {self.btohex(checksum)}")
+        print(msgID, CK_A, CK_B)
+
+        #quels indices dans msgID et checksum ?
+        ####
+        if msgID[0] == checksum[3] and msgID[1] == checksum[4] and CK_A == checksum[5] and CK_B == checksum[6]:
             print("Success! ACK Received! ")
             #printHex(ackPacket, sizeof(ackPacket))
             return 10
@@ -396,3 +410,14 @@ class VMA430(object):
 
 gps = VMA430()
 gps.begin(9600)
+gps.setUBXNav()
+
+while True:
+
+    print(f"got packet : {gps.getUBX_packet()}")
+    print(f"is UTC valid : {gps.utc_time.valid}")
+    print(f"longitude : {gps.location.longitude}")
+    print(f"latitude : {gps.location.latitude}")
+
+
+    time.sleep(1)
