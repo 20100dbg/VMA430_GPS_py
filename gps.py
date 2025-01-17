@@ -33,7 +33,7 @@ class Location(object):
 NAV_MODE = {'pedestrian': 0x03, 'automotive': 0x04, 'sea': 0x05, 'airborne': 0x06}
 DATA_RATE = {'1HZ': 0xE803, '2HZ': 0xFA01, '3_33HZ': 0x2C01, '4HZ': 0xFA00}
 PORT_RATE = {4800: 0xC01200, 9600: 0x802500, 19200: 0x004B00, 38400: 0x009600, 57600: 0x00E100, 115200: 0x00C200, 230400: 0x008400}
-UBX_SYNC = {1: 0xB5, 2: 0x62}
+UBX_SYNC = b'\xB5\x62'
 
 # definition of UBX class IDs
 # source: U-blox7 V14 Receiver Description Protocol page 88 https://www.u-blox.com/sites/default/files/products/documents/u-blox7-V14_ReceiverDescriptionProtocolSpec_%28GPS.G7-SW-12001%29_Public.pdf
@@ -69,14 +69,11 @@ class VMA430(object):
 
 
 
-
     def generateConfiguration(self):
         arr = bytearray()
         arr.append(self.nav_mode)
         arr.append(self.data_rate) # arr[1] et arr[2]
-        arr.append(self.baudrate >> 16)
-        arr.append(self.baudrate >> 8)
-        arr.append(self.baudrate & 0xFF)
+        arr.append(self.baudrate.to_bytes(3, 'little'))
         arr.append(int(self.GLLSentence))
         arr.append(int(self.GSVSentence))
         arr.append(int(self.RMCSentence))
@@ -91,7 +88,7 @@ class VMA430(object):
         print("Configuring u-Blox GPS initial state...");
 
         #Generate the configuration string for Navigation Mode
-        setNav = [0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF, *settings, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+        setNav = [0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF] + settings + [0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
         self.calcChecksum(setNav[2:len(setNav)-4])
 
         #Generate the configuration string for Data Rate
@@ -139,7 +136,7 @@ class VMA430(object):
             print("Setting Port Baud Rate... ");
             self.sendUBX(setPortRate);
             print("Success!");
-            delay(500);
+            time.sleep(0.5);
 
 
     def sendUBX(self, UBXmsg):
@@ -179,7 +176,8 @@ class VMA430(object):
         self.getUBX_ACK(setNAVUBX_pos[2:4])
 
     def getconfig(self):
-        get_cfg_message = [UBX_SYNC[1], UBX_SYNC[2], 0x06, 0x00, 0x00, 0x00, 0x00, 0x00]
+        #get_cfg_message = [UBX_SYNC[0], UBX_SYNC[1], 0x06, 0x00, 0x00, 0x00, 0x00, 0x00]
+        get_cfg_message = UBX_SYNC + b'\x06\x00\x00\x00\x00\x00'
 
         CK_A, CK_B = 0, 0
         for i in range(4):
@@ -192,10 +190,9 @@ class VMA430(object):
         self.sendUBX(get_cfg_message)
 
     def getUBX_packet(self):
-        sync_chars = [UBX_SYNC[1], UBX_SYNC[2]]
-        UBX_packet = [UBX_SYNC[1], UBX_SYNC[2], 0x00, 0x00]
+        #UBX_packet = [UBX_SYNC[0], UBX_SYNC[1], 0x00, 0x00]
+        UBX_packet = UBX_SYNC + b'\x00\x00'
     
-        length_bytes = [0x00, 0x00]
         payload_length = 0
         
         i = 0
@@ -205,83 +202,47 @@ class VMA430(object):
         ubxWait = time.time()
         received_valid_ubx = False
 
-        while True:
 
-            if (time.time() - ubxWait > 1500):
-                print("TimeOut UBX packet!")
-                break
+        if (time.time() - ubxWait > 1.500):
+            print("TimeOut UBX packet!")
+            break
 
-            if True: #self.serial.available():
-                incoming_char = self.serial.read_until(expected='')
-                print(incoming_char)
-                print(" ")
+        data = self.serial.read_until(expected='')
+        print(f"Received : {data}")
 
-                if i < 2:
-                    if incoming_char == sync_chars[i]:
-                        i += 1
+        if data[0:2] != UBX_SYNC:
+            print("[-] Error !")
 
-                elif i > 1:
-                    print("i: ")
-                    print(i)
-                    
-                    if i == 2:
-                        print("got class byte")
-                        class_byte_temp = incoming_char
-                    elif i == 3:
-                        print("got id byte")
-                        id_byte_temp = incoming_char
-                    elif i == 4:
-                        print("got length byte 1")
-                        length_bytes[0] = incoming_char
-                    elif i == 5:
-                        length_bytes[1] = incoming_char
-                        payload_length = length_bytes[1] << 8 | length_bytes[0]
+        class_byte_temp = data[2]
+        id_byte_temp = data[3]
+        #length_bytes = data[4:5]
+        payload_length = int.from_bytes(data[4:5], byteorder='little')
 
-                        print("Expecting payload with length: ")
-                        print(payload_length)
+        print(f"Expecting payload with length: {payload_length}")
 
-                    if i > 5 and checksum_idx == 0:
+        payload = data[5:payload_length+5]
+        checksum = data[payload_length+5:]
 
-                        if payload_length > 40:
-                            print("Invalid UBX packet length!");
-                            break
+        print(f"Received {self.btohex(payload)}")
 
-                        if i - 5 <= payload_length:
-                            buffer_msg[i - 6] = incoming_char
-                        else:
-                            print("Got start of checksum")
-                            checksum_idx = i
+        if payload_length > 40:
+            print("Invalid UBX packet length!");
 
-                    if checksum_idx != 0:
-                    
-                        if i == checksum_idx:
-                            CK_A = incoming_char
 
-                        elif i == checksum_idx + 1:
-                            CK_B = incoming_char
-                            
-                            print("Complete msg: ")
-                            print(class_byte_temp, HEX)
-                            print(" ")
-                            print(id_byte_temp, HEX)
-                            print(" Payload length:")
-                            print(payload_length)
-                            print(" Payload: ")
-                            
-                            for j in range(payload_length):
-                                print(buffer_msg[j], HEX)
-                                print(" ")
+        checksum_idx = payload_length+5
+        CK_A = data[checksum_idx]
+        CK_B = data[checksum_idx + 1]
 
-                            received_valid_ubx = True
+        #TODO : pas de vérification du checksum ?
+        received_valid_ubx = True
 
-                            self.latest_msg.class_byte = class_byte_temp
-                            self.latest_msg.id_byte = id_byte_temp
-                            self.latest_msg.payload_length = payload_length
-                            self.latest_msg.msg = buffer_msg
-                            self.latest_msg.CK_A = CK_A
-                            self.latest_msg.CK_B = CK_B
+        self.latest_msg.class_byte = class_byte_temp
+        self.latest_msg.id_byte = id_byte_temp
+        self.latest_msg.payload_length = payload_length
+        self.latest_msg.msg = buffer_msg
+        self.latest_msg.CK_A = CK_A
+        self.latest_msg.CK_B = CK_B
 
-                    i+= 1
         return received_valid_ubx
 
 
@@ -300,7 +261,7 @@ class VMA430(object):
             return False
 
         msg_data = self.latest_msg.msg
-        self.utc_time.year = msg_data[12] | (msg_data[13]<<8)
+        self.utc_time.year = int.from_bytes(msg_data[12:13], byteorder='little')
         self.utc_time.month = msg_data[14]
         self.utc_time.day = msg_data[15]
         self.utc_time.hour = msg_data[16]
@@ -356,8 +317,7 @@ class VMA430(object):
 
         if data[0:3] == ackPacket:
             print("Received ACK")
-
-        if data[3] == b'\x00':
+        elif data[3] == b'\x00':
             print("NAK Received")
             return 1
 
@@ -365,7 +325,7 @@ class VMA430(object):
         
         ###################
         #zone à corriger
-        checksum = data[2:9]
+        checksum = data[2:8]
 
         #for (i = 2; i < 8; i++):
         for i in checksum:
@@ -379,13 +339,10 @@ class VMA430(object):
         ####
         if msgID[0] == checksum[3] and msgID[1] == checksum[4] and CK_A == checksum[5] and CK_B == checksum[6]:
             print("Success! ACK Received! ")
-            #printHex(ackPacket, sizeof(ackPacket))
             return 10
 
         else:
             print("ACK Checksum Failure: ")
-            #printHex(ackPacket, sizeof(ackPacket))
-            time.sleep(1000)
             return 1
 
 
@@ -395,17 +352,19 @@ class VMA430(object):
         val |= msg_data[spotToStart + 1] << 8 * 1
         val |= msg_data[spotToStart + 2] << 8 * 2
         val |= msg_data[spotToStart + 3] << 8 * 3
-        return val
+
+        return int.from_bytes(msgdata[spotToStart:spotToStart+4], byteorder='little')
+        #return val
 
 
-    def calcChecksum(self, checksumPayload, payloadSize):
+    def calcChecksum(self, checksumPayload):
         CK_A, CK_B = 0, 0
-        for i in range (payloadSize):
+        for i in range (len(checksumPayload)):
             CK_A = CK_A + checksumPayload[i]
             CK_B = CK_B + CK_A;
 
-        checksumPayload[payloadSize] = CK_A;
-        checksumPayload[payloadSize+1] = CK_B;
+        checksumPayload.append(CK_A)
+        checksumPayload.append(CK_B)
 
 
 gps = VMA430()
