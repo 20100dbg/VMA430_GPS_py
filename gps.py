@@ -1,15 +1,6 @@
 import serial
 import time
-
-class UBX_msg(object):
-    def __init__(self):
-        super(UBX_msg, self).__init__()
-        self.class_byte = None
-        self.id_byte = None
-        self.payload_length = None
-        self.msg = None
-        self.CK_A = None
-        self.CK_B = None
+import struct
 
 class Time_UTC(object):
     def __init__(self):
@@ -21,6 +12,9 @@ class Time_UTC(object):
         self.minute = None
         self.second = None
         self.valid = None
+
+    def to_string(self):
+        return f"{self.year}-{self.month}-{self.day} {self.hour}:{self.minute}:{self.second} ({self.valid})"
 
 class Location(object):
     def __init__(self):
@@ -42,10 +36,10 @@ RXM_CLASS = 0x02 # Receiver Manager Messages: Satellite Status, RTC Status
 INF_CLASS = 0x04 # Information Messages: Printf-Style Messages, with IDs such as Error, Warning, Notice
 ACK_CLASS = 0x05 # Ack/Nack Messages: as replies to CFG Input Messages
 CFG_CLASS = 0x06 # Configuration Input Messages: Set Dynamic Model, Set DOP Mask, Set Baud Rate, etc
-MON_CLASS = 0x0A # Monitoring Messages: Comunication Status, CPU Load, Stack Usage, Task Status
-AID_CLASS = 0x0B # AssistNow Aiding Messages: Ephemeris, Almanac, other A-GPS data input
-TIM_CLASS = 0x0D # Timing Messages: Time Pulse Output, Timemark Results
-LOG_CLASS = 0x21 # Logging Messages: Log creation, deletion, info and retrieval
+MON_CLASS = 0x0A #10 Monitoring Messages: Comunication Status, CPU Load, Stack Usage, Task Status
+AID_CLASS = 0x0B #11 AssistNow Aiding Messages: Ephemeris, Almanac, other A-GPS data input
+TIM_CLASS = 0x0D #13 Timing Messages: Time Pulse Output, Timemark Results
+LOG_CLASS = 0x21 #33 Logging Messages: Log creation, deletion, info and retrieval
 
 
 class VMA430(object):
@@ -54,7 +48,6 @@ class VMA430(object):
 
         self.utc_time = Time_UTC()
         self.location = Location()
-        self.latest_msg = UBX_msg()
 
 
     def begin(self, baudrate):
@@ -70,10 +63,18 @@ class VMA430(object):
 
 
     def generateConfiguration(self):
+        
+        tmp_data_rate = self.data_rate.to_bytes(2, 'little')
+        tmp_baudrate = self.baudrate.to_bytes(3, 'little')
+        print(f"tmp_baudrate {tmp_baudrate}")
+
         arr = bytearray()
         arr.append(self.nav_mode)
-        arr.append(self.data_rate) # arr[1] et arr[2]
-        arr.append(self.baudrate.to_bytes(3, 'little'))
+        arr.append(tmp_data_rate[0])
+        arr.append(tmp_data_rate[1])
+        arr.append(tmp_baudrate[0])
+        arr.append(tmp_baudrate[1])
+        arr.append(tmp_baudrate[2])
         arr.append(int(self.GLLSentence))
         arr.append(int(self.GSVSentence))
         arr.append(int(self.RMCSentence))
@@ -117,10 +118,10 @@ class VMA430(object):
 
             if gpsSetSuccess == 5:
                 gpsSetSuccess -= 4
-                time.sleep(500)
+                time.sleep(0.1)
                 lowerPortRate = [0xB5, 0x62, 0x06, 0x00, 0x14, 0x00, 0x01, 0x00, 0x00, 0x00, 0xD0, 0x08, 0x00, 0x00, 0x80, 0x25, 0x00, 0x00, 0x07, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0xA2, 0xB5]
                 self.sendUBX(lowerPortRate)
-                time.sleep(2000);
+                time.sleep(0.1);
 
             if gpsSetSuccess == 6:
                 gpsSetSuccess -= 4
@@ -136,13 +137,13 @@ class VMA430(object):
             print("Setting Port Baud Rate... ");
             self.sendUBX(setPortRate);
             print("Success!");
-            time.sleep(0.5);
+            time.sleep(0.1);
 
 
     def sendUBX(self, UBXmsg):
         print(f"[+] SENDING {UBXmsg}")
         self.serial.write(UBXmsg)
-        time.sleep(0.5)
+        time.sleep(0.1)
 
 
     def setUBXNav(self):
@@ -176,7 +177,6 @@ class VMA430(object):
         self.getUBX_ACK(setNAVUBX_pos[2:4])
 
     def getconfig(self):
-        #get_cfg_message = [UBX_SYNC[0], UBX_SYNC[1], 0x06, 0x00, 0x00, 0x00, 0x00, 0x00]
         get_cfg_message = UBX_SYNC + b'\x06\x00\x00\x00\x00\x00'
 
         CK_A, CK_B = 0, 0
@@ -190,104 +190,129 @@ class VMA430(object):
         self.sendUBX(get_cfg_message)
 
     def getUBX_packet(self):
-        #UBX_packet = [UBX_SYNC[0], UBX_SYNC[1], 0x00, 0x00]
         UBX_packet = UBX_SYNC + b'\x00\x00'
-    
-        payload_length = 0
-        
-        i = 0
-        CK_A = 0
-        CK_B = 0
-        checksum_idx = 0
-        ubxWait = time.time()
         received_valid_ubx = False
-
-
-        if (time.time() - ubxWait > 1.500):
-            print("TimeOut UBX packet!")
-            break
+        receivedSync = False
 
         data = self.serial.read_until(expected='')
-        print(f"Received : {data}")
+        #print(f"getUBX_packet : {self.btohex(data)}")
+        """
+        if not receivedSync:
+            print("did not Received SYNC")
+            return 1
+        """
 
-        if data[0:2] != UBX_SYNC:
-            print("[-] Error !")
+        for idx in range(0,len(data)-2,2):
 
-        class_byte_temp = data[2]
-        id_byte_temp = data[3]
-        #length_bytes = data[4:5]
-        payload_length = int.from_bytes(data[4:5], byteorder='little')
+            if data[idx:idx+2] == UBX_SYNC:
+                #print("Received SYNC")
+                receivedSync = True
+                subpacket = data[idx:]
+                #break
+        
+                class_byte = subpacket[2]
 
-        print(f"Expecting payload with length: {payload_length}")
+                # in [NAV_CLASS, RXM_CLASS, INF_CLASS, ACK_CLASS, CFG_CLASS, MON_CLASS, AID_CLASS, TIM_CLASS, LOG_CLASS]:
+                if class_byte == NAV_CLASS:
 
-        payload = data[5:payload_length+5]
-        checksum = data[payload_length+5:]
+                    id_byte = subpacket[3]
+                    payload_length = int.from_bytes(subpacket[4:5], byteorder='little')
 
-        print(f"Received {self.btohex(payload)}")
+                    if payload_length == 0:
+                        continue
 
-        if payload_length > 40:
-            print("Invalid UBX packet length!");
+                    payload = subpacket[5:payload_length+5]
+                    checksum = subpacket[payload_length+5:]
 
+                    """
+                    print(f"class_byte : {class_byte}")
+                    print(f"id_byte : {id_byte}")
+                    print(f"payload length : {payload_length}")
+                    print(f"payload : {self.btohex(payload)}")
+                    print(f"checksum : {self.btohex(checksum[:15])}...")
+                    """
 
-        checksum_idx = payload_length+5
-        CK_A = data[checksum_idx]
-        CK_B = data[checksum_idx + 1]
+                    if payload_length > 40:
+                        print("Invalid UBX packet length!");
 
-        #TODO : pas de vérification du checksum ?
-        received_valid_ubx = True
-
-        self.latest_msg.class_byte = class_byte_temp
-        self.latest_msg.id_byte = id_byte_temp
-        self.latest_msg.payload_length = payload_length
-        self.latest_msg.msg = buffer_msg
-        self.latest_msg.CK_A = CK_A
-        self.latest_msg.CK_B = CK_B
-
-        return received_valid_ubx
-
-
-    def parse_ubx_data(self):
-        if self.latest_msg.class_byte == NAV_CLASS:
-            if self.latest_msg.id_byte == LOG_CLASS:
-                self.parse_nav_timeutc()
-            elif self.latest_msg.id_byte == RXM_CLASS:
-                self.parse_nav_pos()
-
+                    checksum_idx = payload_length+5
+                    CK_A = subpacket[checksum_idx]
+                    CK_B = subpacket[checksum_idx + 1]
 
 
-    def parse_nav_timeutc(self):
+                    if id_byte == LOG_CLASS:
+                        self.parse_nav_timeutc(payload)
+                    elif id_byte == RXM_CLASS:
+                        self.parse_nav_pos(payload)
 
-        if self.latest_msg.payload_length != 20:
+        if not receivedSync:
+            print("[-] Did not received SYNC")
             return False
 
-        msg_data = self.latest_msg.msg
-        self.utc_time.year = int.from_bytes(msg_data[12:13], byteorder='little')
-        self.utc_time.month = msg_data[14]
-        self.utc_time.day = msg_data[15]
-        self.utc_time.hour = msg_data[16]
-        self.utc_time.minute = msg_data[17]
-        self.utc_time.second = msg_data[18]
-        
-        print("Validaty time data:", msg_data[19])
-        self.utc_time.valid = (msg_data[19] == 0x07)
         return True
 
 
-    def parse_nav_pos(self):
+
+    def parse_nav_timeutc(self, payload):
+
+        if len(payload) != 20:
+            return False
+
+        self.utc_time.year = int.from_bytes(payload[13:15], byteorder='little')
+        self.utc_time.month = payload[15]
+        self.utc_time.day = payload[16]
+        self.utc_time.hour = payload[17]
+        self.utc_time.minute = payload[18]
+        self.utc_time.second = payload[19]
+        
+        print(f"date : {self.utc_time.to_string()}")
+        self.utc_time.valid = (payload[14] == 0x07)
+        return True
+
+
+    def parse_nav_pos(self, payload):
         temp_lon, temp_lat, temp_val = 0, 0, 0
         longitude, latitude = 0.0, 0.0
 
         #byte test_arr[] = {0x00, 0x45, 0x62, 0x1D, 0x4B, 0xE0, 0x4F, 0x02, 0x4A, 0x34, 0x65, 0x1E, 0x39, 0x5A, 0x00, 0x00, 0x63, 0xA6, 0xFF, 0xFF, 0xD7, 0x39, 0x01, 0x00, 0x9F, 0xB9, 0x00, 0x00};
-        msg_data = self.latest_msg.msg
 
-        if self.latest_msg.payload_length != 28:
+        """
+        print(f"payload length : {len(payload)}")
+        print(f"payload : {self.btohex(payload)}")
+        """
+
+        if len(payload) != 28:
             return False
 
-        temp_lon = self.extractLong(4, msg_data);
+        """
+        print(f"temp_lon bytes : {self.btohex(payload[4:8])}")
+        print(f"temp_lat bytes : {self.btohex(payload[8:12])}")
+
+        temp_lon = int.from_bytes(payload[4:9], byteorder='little')
         self.location.longitude = temp_lon*0.0000001
+        print(f"temp_lon {temp_lon}")
+        """
+
+        print(f"payload : {self.btohex(payload)}")
         
-        temp_lat = self.extractLong(8, msg_data)
-        self.location.latitude = temp_lat*0.0000001
+        print(f"test0 : {self.btohex(payload[4:8])}")
+        test = self.extractLong(4, payload)
+        print(f"test1 : {test}")
+        test = struct.unpack('d', b'\x00\x00\x00\x00' + payload[4:8])[0]
+        print(f"test2 : {test}")
+
+        print(f"__________")
+
+        print(f"test0 : {self.btohex(payload[8:12])}")
+        test = self.extractLong(8, payload)
+        print(f"test1 : {test}")
+        test = struct.unpack('d', b'\x00\x00\x00\x00' + payload[8:12])[0]
+        print(f"test2 : {test}")
+
+
+        #temp_lat = int.from_bytes(payload[8:12], byteorder='little')
+        #self.location.latitude = temp_lat*0.0000001
+        #print(f"temp_lat {temp_lat}")
 
         return True;
 
@@ -302,59 +327,33 @@ class VMA430(object):
 
         ackWait = time.time()
         ackPacket = b'\xB5\x62\x05'
-        i = 0
+        receivedACK = False
 
-        data = self.serial.read_until(expected='')
-        if not data:
-            time.sleep(0.5)
+        for x in range(5):
             data = self.serial.read_until(expected='')
-            if not data:
-                print("ACK Timeout")
-                return 5
 
-        #print(f"[+] READ {self.btohex(data)}")
-        #print(f"[+] READ {data}")
+            if data[0:3] == ackPacket:
+                #print("[+] Received ACK")
+                receivedACK = True
+                break
 
-        if data[0:3] == ackPacket:
-            print("Received ACK")
-        elif data[3] == b'\x00':
-            print("NAK Received")
+        if not receivedACK:
+            print("[-] Did not received ACK")
             return 1
 
-        print(f"data : {self.btohex(data[0:15])}...")
-        
-        ###################
-        #zone à corriger
-        checksum = data[2:8]
+        checksum = data[3:10]
 
-        #for (i = 2; i < 8; i++):
-        for i in checksum:
-            CK_A = CK_A + i
+        for i in range(2,8):
+            CK_A = CK_A + data[i]
             CK_B = CK_B + CK_A
 
-        print(f"checksum : {self.btohex(checksum)}")
-        print(msgID, CK_A, CK_B)
-
-        #quels indices dans msgID et checksum ?
-        ####
         if msgID[0] == checksum[3] and msgID[1] == checksum[4] and CK_A == checksum[5] and CK_B == checksum[6]:
-            print("Success! ACK Received! ")
+            print("[+] ACK Received! ")
             return 10
 
         else:
-            print("ACK Checksum Failure: ")
+            print("[-] ACK Checksum Failure: ")
             return 1
-
-
-    def extractLong(self, spotToStart, msg_data):
-        val = 0;
-        val |= msg_data[spotToStart + 0] << 8 * 0
-        val |= msg_data[spotToStart + 1] << 8 * 1
-        val |= msg_data[spotToStart + 2] << 8 * 2
-        val |= msg_data[spotToStart + 3] << 8 * 3
-
-        return int.from_bytes(msgdata[spotToStart:spotToStart+4], byteorder='little')
-        #return val
 
 
     def calcChecksum(self, checksumPayload):
@@ -366,17 +365,30 @@ class VMA430(object):
         checksumPayload.append(CK_A)
         checksumPayload.append(CK_B)
 
+    def extractLong(self, spotToStart, payload):
+        val = 0;
+        val |= payload[spotToStart + 0] << 8 * 0
+        val |= payload[spotToStart + 1] << 8 * 1
+        val |= payload[spotToStart + 2] << 8 * 2
+        val |= payload[spotToStart + 3] << 8 * 3
+        return val
+
 
 gps = VMA430()
 gps.begin(9600)
+#gps.sendConfiguration()
+
 gps.setUBXNav()
 
 while True:
+    print("---- MAIN LOOP ----")
 
-    print(f"got packet : {gps.getUBX_packet()}")
-    print(f"is UTC valid : {gps.utc_time.valid}")
+    gps.getUBX_packet()
+
+    """
+    print(f"UTC : {gps.utc_time.to_string()}")
     print(f"longitude : {gps.location.longitude}")
     print(f"latitude : {gps.location.latitude}")
-
+    """
 
     time.sleep(1)
