@@ -40,12 +40,12 @@ class UBX(object):
         self.checksum = data[self.payload_length+6:self.payload_length+8]
 
     def to_string(self):
-        print(f"data : {btohex(self.obj[:40])}")
-        print(f"class_byte : {self.class_byte}")
-        print(f"id_byte : {self.id_byte}")
-        print(f"payload length : {self.payload_length} {len(self.payload)}")
-        print(f"payload : {btohex(self.payload)}")
-        print(f"checksum : {btohex(self.checksum)}")
+        return f"""data : {btohex(self.obj[:40])}
+                class_byte : {self.class_byte}
+                id_byte : {self.id_byte}
+                payload length : {self.payload_length} {len(self.payload)}
+                payload : {btohex(self.payload)}
+                checksum : {btohex(self.checksum)}"""
 
 
 NAV_MODE = {'pedestrian': 0x03, 'automotive': 0x04, 'sea': 0x05, 'airborne': 0x06}
@@ -72,9 +72,9 @@ class VMA430(object):
         self.utc_time = Time_UTC()
         self.location = Location()
 
-    def begin(self, baudrate):
+    def begin(self, port='/dev/ttyS0', baudrate=9600, debug=False):
 
-        port = '/dev/ttyS0'
+        self.debug = debug
         self.baudrate = baudrate
         self.nav_mode = NAV_MODE['pedestrian']
         self.data_rate = DATA_RATE['4HZ']
@@ -83,7 +83,9 @@ class VMA430(object):
                     bytesize=serial.EIGHTBITS, timeout=1)
 
     def sendUBX(self, UBXmsg):
-        print(f"[+] SENDING {UBXmsg}")
+        if self.debug:
+            print(f"[+] SENDING {UBXmsg}")
+        
         self.serial.write(UBXmsg)
         time.sleep(0.1)
 
@@ -96,8 +98,7 @@ class VMA430(object):
         
         tmp_data_rate = self.data_rate.to_bytes(2, 'little')
         tmp_baudrate = self.baudrate.to_bytes(3, 'little')
-        print(f"tmp_baudrate {tmp_baudrate}")
-
+        
         arr = bytearray()
         arr.append(self.nav_mode)
         arr.append(tmp_data_rate[0])
@@ -116,7 +117,8 @@ class VMA430(object):
         
         settings = self.generateConfiguration()
         gpsSetSuccess = 0
-        print("Configuring u-Blox GPS initial state...");
+        if self.debug:
+            print("Configuring u-Blox GPS initial state...");
 
         #Generate the configuration string for Navigation Mode
         setNav = [0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF] + settings + [0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
@@ -141,7 +143,8 @@ class VMA430(object):
 
         while gpsSetSuccess < 3:
         
-            print("Setting Navigation mode...")
+            if self.debug:
+                print("Setting Navigation mode...")
 
             self.sendUBX(setNav)     #Send UBX Packet
             gpsSetSuccess += self.getUBX_ACK(setNav[2:4]) #Passes Class ID and Message ID to the ACK Receive function
@@ -159,22 +162,27 @@ class VMA430(object):
                 gpsStatus[0] = True;
 
         if gpsSetSuccess == 3:
-            print("Navigation mode configuration failed.");
-            
+            if self.debug:
+                print("Navigation mode configuration failed.");
+            return False
+
         gpsSetSuccess = 0;
 
         if settings[4] != 0x25:
-            print("Setting Port Baud Rate... ");
             self.sendUBX(setPortRate);
-            print("Success!");
             time.sleep(0.1);
+            return True
+
+        return False
 
 
     def setUBXNav(self):
         setNAVUBX = [0xB5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x01, 0x21, 0x01]
         setNAVUBX_pos = [0xB5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x01, 0x02, 0x01]
-        print("Enabling UBX time NAV data");
         
+        if self.debug:
+            print("Enabling UBX time NAV data");
+            
         CK_A, CK_B = self.calculate_checksum(setNAVUBX[2:])
         setNAVUBX.append(CK_A)
         setNAVUBX.append(CK_B)
@@ -182,7 +190,9 @@ class VMA430(object):
         self.sendUBX(setNAVUBX)
         self.getUBX_ACK(setNAVUBX[2:4]);
 
-        print("Enabling UBX position NAV data");
+        if self.debug:
+            print("Enabling UBX position NAV data");
+        
         CK_A, CK_B = self.calculate_checksum(setNAVUBX_pos[2:])
         setNAVUBX_pos.append(CK_A)
         setNAVUBX_pos.append(CK_B)
@@ -210,7 +220,9 @@ class VMA430(object):
 
     def getUBX_packet(self):
         receivedSync = False
+        #data = self.serial.read(self.serial.in_waiting)
         data = self.serial.read_until(expected='')
+
 
         idx = 0
         while True:
@@ -220,9 +232,6 @@ class VMA430(object):
 
                 ubx_packet = UBX()
                 ubx_packet.read(data[idx:])
-
-                #ubx_packet.to_string()
-                #print(f"ubx_packet.id_byte : {ubx_packet.id_byte}")
 
                 if ubx_packet.id_byte == LOG_CLASS:
                     self.parse_nav_timeutc(ubx_packet.payload)
@@ -242,6 +251,8 @@ class VMA430(object):
     def parse_nav_timeutc(self, payload):
 
         if len(payload) != 20:
+            #Empty fields
+            self.utc_time = Time_UTC()
             return False
 
         self.utc_time.year = int.from_bytes(payload[12:14], byteorder='little')
@@ -252,20 +263,21 @@ class VMA430(object):
         self.utc_time.second = payload[18]
         self.utc_time.valid = (payload[19] == 0x07)
         
-        print(f"date : {self.utc_time.to_string()}")
+        if self.debug:
+            print(f"date : {self.utc_time.to_string()}")
+            
         return True
 
 
     def parse_nav_pos(self, payload):
 
         if len(payload) != 28:
+            self.location.longitude = None
+            self.location.latitude = None
             return False
 
-        longitude = self.extract_long(payload[4:8]) *0.0000001
-        print(f"longitude : {longitude}")
-
-        latitude = self.extract_long(payload[8:12]) *0.0000001
-        print(f"latitude : {latitude}")
+        self.location.longitude = self.extract_long(payload[4:8]) *0.0000001
+        self.location.latitude = self.extract_long(payload[8:12]) *0.0000001
 
         return True;
 
@@ -276,7 +288,8 @@ class VMA430(object):
         receivedACK = False
 
         idx = 0
-        data = self.serial.read_until(expected='')
+        #data = self.serial.read(self.serial.in_waiting)
+        data = self.serial.read_until(expected="")
         
         while True:
 
@@ -287,10 +300,13 @@ class VMA430(object):
 
                 if msgID[0] == data[idx + 6] and msgID[1] == data[idx + 7] and \
                     CK_A == data[idx + 8] and CK_B == data[idx + 9]:
-                    print("[+] ACK Received! ")
+
+                    if self.debug:
+                        print("[+] ACK Received! ")
                     return 10
                 else:
-                    print("[-] ACK Checksum Failure: ")
+                    if self.debug:
+                        print("[-] ACK Checksum Failure: ")
                     return 1
 
             idx += 1
@@ -299,7 +315,8 @@ class VMA430(object):
                 break
 
         if not receivedACK:
-            print("[-] Did not received ACK")
+            if self.debug:
+                print("[-] Did not received ACK")
             return 1
 
 
@@ -328,12 +345,15 @@ def btohex(b):
     return ' '.join(['{:02X}'.format(x) for x in b])
 
 
-gps = VMA430()
-gps.begin(9600)
-#gps.sendConfiguration()
+#For test purposes
+if __name__ == "__main__":
+    
+    gps = VMA430()
+    gps.begin(9600)
+    #gps.sendConfiguration()
 
-gps.setUBXNav()
+    gps.setUBXNav()
 
-while True:
-    gps.getUBX_packet()
-    time.sleep(1)
+    while True:
+        gps.getUBX_packet()
+        time.sleep(1)

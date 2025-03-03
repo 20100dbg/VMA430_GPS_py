@@ -21,8 +21,8 @@ Wire up the GPS module to an Arduino compatible board as shown below:
 |----------|-------------|
 |VCC|5V|
 |GND|GND|
-|TXD|GPIO 14 (TXD)|
-|RXD|GPIO 15 (RXD)|
+|TXD|GPIO 15 (RXD)|
+|RXD|GPIO 14 (TXD)|
 
 
 ## Todo
@@ -30,3 +30,34 @@ Wire up the GPS module to an Arduino compatible board as shown below:
 - add a schema/picture showing wiring
 - Add support for module configuration
 - Add/verify support for GLONASS, QZSS and SBAS
+
+
+
+
+## Use another UART
+
+|GPS Module|GPIO|
+|----------|-------------|
+|VCC|5V|
+|GND|GND|
+|TXD|GPIO 1 / ID_SC|
+|RXD|GPIO 0 / ID_SD|
+
+
+- List overlays
+`dtoverlay -a | grep uart`
+
+- Show details
+`dtoverlay -h uart2`
+
+- show details about GPIO
+`raspi-gpio funcs`
+`pinctrl`
+
+- appliquer overlay
+`sudo nano /boot/firmware/config.txt`
+
+Ajouter à la fin
+`dtoverlay=uart2`
+reboot
+
